@@ -9,7 +9,7 @@ Dialed In is a macOS menu bar app (SwiftUI + AppKit) that helps you get into dee
 - Keyboard shortcuts for fast control (start, add time, end)
 - Onboarding, session complete modal, and subtle toasts
 
-## Tech
+## Stack
 - Swift 5, SwiftUI, AppKit (macOS app)
 - Xcode project: `Dialed In.xcodeproj`
 
