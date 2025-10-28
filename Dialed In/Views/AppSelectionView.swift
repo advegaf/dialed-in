@@ -14,7 +14,9 @@ struct AppSelectionView: View {
     let loadError: String?
 
     @State private var searchText = ""
-    @AppStorage("dialedIn.sessionMode") private var sessionModeRawValue: String = SessionMode.allowList.rawValue
+    @State private var hotKeyConfiguration = HotKeyManager.shared.currentConfiguration
+    @State private var selectedAppIDs: Set<String> = []
+    @AppStorage("dialedIn.sessionMode") private var sessionModeRawValue: String = FocusSessionMode.allowList.rawValue
     @AppStorage("dialedIn.launchAtLogin") private var launchAtLogin = true
     @AppStorage("dialedIn.syncAcrossDevices") private var syncAcrossDevices = true
     @AppStorage("dialedIn.hideMenuBarIcon") private var hideMenuBarIcon = false
@@ -23,35 +25,15 @@ struct AppSelectionView: View {
     @AppStorage("dialedIn.expandOnHover") private var expandOnHover = true
     @AppStorage("dialedIn.hoverPreviewDelay") private var hoverPreviewDelay: Double = 0.2
 
-    enum SessionMode: String, CaseIterable, Identifiable {
-        case allowList = "Allow List"
-        case blockList = "Block List"
-
-        var id: String { rawValue }
-        var subtitle: String {
-            switch self {
-            case .allowList: return "Only the apps you choose remain reachable."
-            case .blockList: return "Everything is open except the apps you block."
-            }
-        }
-
-        var icon: String {
-            switch self {
-            case .allowList: return "lock.display"
-            case .blockList: return "nosign"
-            }
-        }
-    }
-
     private var filteredApps: [AppItem] {
         guard !searchText.isEmpty else { return apps }
         return apps.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
     }
 
-    private var selectedApps: [AppItem] { apps.filter { $0.isSelected } }
+    private var selectedApps: [AppItem] { apps.filter { selectedAppIDs.contains($0.id) } }
     private var isFiltering: Bool { !searchText.isEmpty }
-    private var sessionMode: SessionMode { SessionMode(rawValue: sessionModeRawValue) ?? .allowList }
-    private var sessionModeBinding: Binding<SessionMode> {
+    private var sessionMode: FocusSessionMode { FocusSessionMode(rawValue: sessionModeRawValue) ?? .allowList }
+    private var sessionModeBinding: Binding<FocusSessionMode> {
         Binding(
             get: { sessionMode },
             set: { sessionModeRawValue = $0.rawValue }
@@ -118,6 +100,8 @@ struct AppSelectionView: View {
                             range: 0.1...1.0,
                             displayValue: String(format: "%.1f s", hoverPreviewDelay)
                         )
+                        divider
+                        HotKeyRecorderRow(configuration: $hotKeyConfiguration)
                     }
 
                     focusScopeCard
@@ -125,7 +109,8 @@ struct AppSelectionView: View {
                     if !selectedApps.isEmpty {
                         SelectedAppsPanel(
                             selectedApps: selectedApps,
-                            onRemove: deselect
+                            onRemove: deselect,
+                            mode: sessionMode
                         )
                         .allowsHitTesting(!sessionController.isSessionActive && !isLoading)
                         .opacity((sessionController.isSessionActive || isLoading) ? 0.6 : 1.0)
@@ -137,9 +122,25 @@ struct AppSelectionView: View {
             }
         }
         .background(Color.clear)
+        .onAppear {
+            hotKeyConfiguration = HotKeyManager.shared.currentConfiguration
+            if selectedAppIDs.isEmpty {
+                let storedIDs = Set(UserDefaults.standard.stringArray(forKey: "dialedIn.selectedAppIDs") ?? [])
+                let currentSelections = Set(apps.filter { $0.isSelected }.map { $0.id })
+                selectedAppIDs = currentSelections.union(storedIDs)
+                syncAppsWithSelectedIDs()
+                persistSelection()
+            } else {
+                syncAppsWithSelectedIDs()
+            }
+        }
         .onChange(of: apps) { _, newValue in
-            let selectedIDs = newValue.filter { $0.isSelected }.map { $0.id }
-            UserDefaults.standard.set(selectedIDs, forKey: "dialedIn.selectedAppIDs")
+            let currentSelections = Set(newValue.filter { $0.isSelected }.map { $0.id })
+            if !currentSelections.isEmpty {
+                selectedAppIDs.formUnion(currentSelections)
+            }
+            syncAppsWithSelectedIDs()
+            persistSelection()
         }
     }
 
@@ -304,18 +305,48 @@ struct AppSelectionView: View {
 
 
     private func binding(for app: AppItem) -> Binding<Bool> {
-        guard let index = apps.firstIndex(where: { $0.id == app.id }) else {
-            return .constant(false)
-        }
-        return $apps[index].isSelected
+        Binding(
+            get: { selectedAppIDs.contains(app.id) },
+            set: { newValue in
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                    updateSelection(for: app, isSelected: newValue)
+                }
+            }
+        )
     }
 
     private func deselect(_ app: AppItem) {
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+            updateSelection(for: app, isSelected: false)
+        }
+    }
+
+    private func updateSelection(for app: AppItem, isSelected: Bool) {
         if let index = apps.firstIndex(where: { $0.id == app.id }) {
-            withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                apps[index].isSelected = false
+            apps[index].isSelected = isSelected
+        }
+
+        if isSelected {
+            selectedAppIDs.insert(app.id)
+        } else {
+            selectedAppIDs.remove(app.id)
+        }
+
+        syncAppsWithSelectedIDs()
+        persistSelection()
+    }
+
+    private func syncAppsWithSelectedIDs() {
+        for index in apps.indices {
+            let shouldSelect = selectedAppIDs.contains(apps[index].id)
+            if apps[index].isSelected != shouldSelect {
+                apps[index].isSelected = shouldSelect
             }
         }
+    }
+
+    private func persistSelection() {
+        UserDefaults.standard.set(Array(selectedAppIDs), forKey: "dialedIn.selectedAppIDs")
     }
 }
 
@@ -387,12 +418,12 @@ struct SettingSliderRow: View {
 }
 
 private struct SessionModeSelector: View {
-    @Binding var selection: AppSelectionView.SessionMode
+    @Binding var selection: FocusSessionMode
     @Namespace private var animation
 
     var body: some View {
         HStack(spacing: Spacing.sm) {
-            ForEach(AppSelectionView.SessionMode.allCases) { mode in
+            ForEach(FocusSessionMode.allCases) { mode in
                 let isSelected = mode == selection
 
                 Button {

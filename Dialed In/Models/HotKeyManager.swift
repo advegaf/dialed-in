@@ -2,6 +2,11 @@ import AppKit
 import Carbon
 
 final class HotKeyManager {
+    enum HotKeyError: Error, Equatable {
+        case missingModifiers
+        case registrationFailed
+    }
+
     struct Configuration: Equatable {
         var keyCode: UInt32
         var modifiers: NSEvent.ModifierFlags
@@ -28,13 +33,21 @@ final class HotKeyManager {
     }
 
     func registerStoredHotKey() {
-        register(configuration: configuration)
+        _ = installHotKey(for: configuration)
     }
 
-    func updateHotKey(configuration newConfiguration: Configuration) {
-        configuration = HotKeyManager.sanitized(configuration: newConfiguration)
+    func updateHotKey(configuration newConfiguration: Configuration) throws {
+        let sanitized = HotKeyManager.sanitized(configuration: newConfiguration)
+        guard !sanitized.modifiers.isEmpty else {
+            throw HotKeyError.missingModifiers
+        }
+
+        guard installHotKey(for: sanitized) else {
+            throw HotKeyError.registrationFailed
+        }
+
+        configuration = sanitized
         HotKeyManager.store(configuration: configuration, key: storageKey)
-        register(configuration: configuration)
     }
 
     func displayString(for configuration: Configuration) -> String {
@@ -47,20 +60,21 @@ final class HotKeyManager {
         HotKeyManager.sanitizedModifiers(flags)
     }
 
-    private func register(configuration newConfiguration: Configuration) {
-        let sanitized = HotKeyManager.sanitized(configuration: newConfiguration)
+    @discardableResult
+    private func installHotKey(for configuration: Configuration) -> Bool {
         unregister()
 
+        var localHotKeyRef: EventHotKeyRef?
         var hotKeyID = EventHotKeyID(signature: OSType("DInH".fourCharCodeValue), id: UInt32(1))
-        let carbonModifiers = carbonFlags(from: sanitized.modifiers)
+        let carbonModifiers = carbonFlags(from: configuration.modifiers)
 
-        let status = RegisterEventHotKey(sanitized.keyCode, carbonModifiers, hotKeyID, GetEventDispatcherTarget(), 0, &hotKeyRef)
+        let status = RegisterEventHotKey(configuration.keyCode, carbonModifiers, hotKeyID, GetEventDispatcherTarget(), 0, &localHotKeyRef)
 
-        guard status == noErr, let hotKeyRef else {
-            return
+        guard status == noErr, let localHotKeyRef else {
+            return false
         }
 
-        configuration = sanitized
+        hotKeyRef = localHotKeyRef
 
         var eventSpec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
         let callback: EventHandlerUPP = { _, event, userData in
@@ -71,7 +85,14 @@ final class HotKeyManager {
         }
 
         let selfPointer = Unmanaged.passUnretained(self).toOpaque()
-        InstallEventHandler(GetEventDispatcherTarget(), callback, 1, &eventSpec, selfPointer, &eventHandlerRef)
+        let installStatus = InstallEventHandler(GetEventDispatcherTarget(), callback, 1, &eventSpec, selfPointer, &eventHandlerRef)
+
+        guard installStatus == noErr else {
+            unregister()
+            return false
+        }
+
+        return true
     }
 
     func unregister() {

@@ -10,6 +10,7 @@ import AppKit
     @Published private(set) var activeSessionApps: [AppItem] = []
     @Published private(set) var completedSessionMinutes: Int?
     @Published var blockedAppName: String?
+    @Published private(set) var sessionHistory: [SessionRecord] = []
 
     private var allowedBundleIDs: Set<String> = []
     private var timerCancellable: AnyCancellable?
@@ -17,6 +18,10 @@ import AppKit
     private var notificationObservers: [NSObjectProtocol] = []
     private var blockedResetWorkItem: DispatchWorkItem?
     private var lastActiveAllowedBundleID: String?
+    private var sessionStartDate: Date?
+
+    private var sessionMode: FocusSessionMode = .allowList
+    private var blockedBundleIDs: Set<String> = []
 
     private let protectedBundleIdentifiers: Set<String> = [
         "com.apple.finder",
@@ -29,30 +34,47 @@ import AppKit
 
     private let menuBarManager: MenuBarManager
     private let workspaceCenter = NSWorkspace.shared.notificationCenter
+    private let historyStore = SessionHistoryStore()
 
     init(menuBarManager: MenuBarManager) {
         self.menuBarManager = menuBarManager
+        sessionHistory = historyStore.load()
         registerMenuBarNotifications()
     }
 
     // MARK: - Session lifecycle
 
-    func startSession(apps: [AppItem], durationMinutes: Double) {
-        guard !apps.isEmpty else { return }
-
+    func startSession(apps: [AppItem], mode: FocusSessionMode, durationMinutes: Double) {
         if isSessionActive {
             endSession()
         }
 
         let seconds = max(1, Int(durationMinutes * 60))
-        allowedBundleIDs = Set(apps.map { $0.bundleIdentifier }.filter { !$0.isEmpty })
-        if let ownBundle = Bundle.main.bundleIdentifier {
-            allowedBundleIDs.insert(ownBundle)
+        sessionMode = mode
+
+        switch mode {
+        case .allowList:
+            guard !apps.isEmpty else { return }
+            allowedBundleIDs = Set(apps.map { $0.bundleIdentifier }.filter { !$0.isEmpty })
+            if let ownBundle = Bundle.main.bundleIdentifier {
+                allowedBundleIDs.insert(ownBundle)
+            }
+            allowedBundleIDs.formUnion(protectedBundleIdentifiers)
+            blockedBundleIDs = []
+        case .blockList:
+            blockedBundleIDs = Set(apps.map { $0.bundleIdentifier }.filter { !$0.isEmpty })
+            blockedBundleIDs.subtract(protectedBundleIdentifiers)
+            allowedBundleIDs = []
+            if let ownBundle = Bundle.main.bundleIdentifier {
+                allowedBundleIDs.insert(ownBundle)
+            }
+            allowedBundleIDs.formUnion(protectedBundleIdentifiers)
         }
 
         blockedResetWorkItem?.cancel()
         blockedAppName = nil
         completedSessionMinutes = nil
+        sessionStartDate = Date()
 
         activeSessionApps = apps
         totalSeconds = seconds
@@ -74,10 +96,22 @@ import AppKit
         timerCancellable?.cancel()
         timerCancellable = nil
 
+        let sessionApps = activeSessionApps
+        let completedMode = sessionMode
+
         if completed {
             let elapsedSeconds = totalSeconds - remainingSeconds
             let minutes = max(1, Int(round(Double(elapsedSeconds) / 60.0)))
             completedSessionMinutes = minutes
+            let record = SessionRecord(
+                id: UUID(),
+                startedAt: sessionStartDate ?? Date().addingTimeInterval(-Double(totalSeconds)),
+                durationMinutes: minutes,
+                mode: completedMode,
+                appNames: sessionApps.map { $0.name }
+            )
+            sessionHistory.insert(record, at: 0)
+            historyStore.save(sessionHistory)
         } else {
             completedSessionMinutes = nil
         }
@@ -85,6 +119,8 @@ import AppKit
         blockedResetWorkItem?.cancel()
         blockedResetWorkItem = nil
         blockedAppName = nil
+
+        sessionStartDate = nil
 
         isSessionActive = false
         remainingSeconds = 0
@@ -96,6 +132,9 @@ import AppKit
         menuBarManager.updateStatus(isActive: false)
 
         removeWorkspaceObservers()
+
+        blockedBundleIDs.removeAll()
+        sessionMode = .allowList
     }
 
     func addTime(minutes: Int) {
@@ -143,11 +182,23 @@ import AppKit
             self?.handleWorkspaceEvent(notification)
         }
 
+        let didLaunch = workspaceCenter.addObserver(forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main) { [weak self] notification in
+            self?.handleWorkspaceEvent(notification)
+        }
+
         let didActivate = workspaceCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] notification in
             self?.handleWorkspaceEvent(notification)
         }
 
-        workspaceObservers = [willLaunch, didActivate]
+        let didUnhide = workspaceCenter.addObserver(forName: NSWorkspace.didUnhideApplicationNotification, object: nil, queue: .main) { [weak self] notification in
+            self?.handleWorkspaceEvent(notification)
+        }
+
+        let activeSpaceChanged = workspaceCenter.addObserver(forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.handleSpaceChange()
+        }
+
+        workspaceObservers = [willLaunch, didLaunch, didActivate, didUnhide, activeSpaceChanged]
     }
 
     private func removeWorkspaceObservers() {
@@ -161,6 +212,15 @@ import AppKit
         guard isSessionActive,
               let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
               let bundleID = app.bundleIdentifier else { return }
+
+        if sessionMode == .blockList {
+            if blockedBundleIDs.contains(bundleID) {
+                block(application: app, bundleID: bundleID)
+            } else {
+                lastActiveAllowedBundleID = bundleID
+            }
+            return
+        }
 
         if allowedBundleIDs.contains(bundleID) {
             lastActiveAllowedBundleID = bundleID
@@ -180,6 +240,12 @@ import AppKit
         } else {
             block(application: app, bundleID: bundleID)
         }
+    }
+
+    private func handleSpaceChange() {
+        guard isSessionActive else { return }
+        enforceCurrentFrontmostApplication()
+        terminateDisallowedRunningApplications()
     }
 
     private func block(application: NSRunningApplication, bundleID: String) {
@@ -218,12 +284,42 @@ import AppKit
     }
 
     private func terminateDisallowedRunningApplications() {
+        switch sessionMode {
+        case .allowList:
+            for app in NSWorkspace.shared.runningApplications {
+                guard let bundleID = app.bundleIdentifier else { continue }
+                if allowedBundleIDs.contains(bundleID) { continue }
+                if protectedBundleIdentifiers.contains(bundleID) { continue }
+                if app == NSRunningApplication.current { continue }
+                block(application: app, bundleID: bundleID)
+            }
+        case .blockList:
+            for app in NSWorkspace.shared.runningApplications {
+                guard let bundleID = app.bundleIdentifier else { continue }
+                if !blockedBundleIDs.contains(bundleID) { continue }
+                if protectedBundleIdentifiers.contains(bundleID) { continue }
+                if app == NSRunningApplication.current { continue }
+                block(application: app, bundleID: bundleID)
+            }
+        }
+    }
+
+    func minimizeDistractions() {
         for app in NSWorkspace.shared.runningApplications {
             guard let bundleID = app.bundleIdentifier else { continue }
-            if allowedBundleIDs.contains(bundleID) { continue }
-            if protectedBundleIdentifiers.contains(bundleID) { continue }
             if app == NSRunningApplication.current { continue }
-            block(application: app, bundleID: bundleID)
+            if protectedBundleIdentifiers.contains(bundleID) { continue }
+
+            switch sessionMode {
+            case .allowList:
+                if !allowedBundleIDs.contains(bundleID) {
+                    app.hide()
+                }
+            case .blockList:
+                if blockedBundleIDs.contains(bundleID) {
+                    app.hide()
+                }
+            }
         }
     }
 

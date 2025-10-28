@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import CoreGraphics
 
 @MainActor
 final class ToastPresenter {
@@ -46,9 +47,15 @@ final class ToastPresenter {
         panel.isOpaque = false
         panel.hasShadow = true
         panel.backgroundColor = .clear
-        panel.level = .screenSaver
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        let maximumLevel = NSWindow.Level(CGWindowLevelForKey(.maximumWindow))
+        panel.level = maximumLevel
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle, .transient]
         panel.ignoresMouseEvents = true
+        panel.animationBehavior = .utilityWindow
+        panel.isMovable = false
+        panel.isExcludedFromWindowsMenu = true
+        panel.hidesOnDeactivate = false
+        panel.collectionBehavior.insert(.fullScreenNone)
 
         let hostingView = NSHostingView(rootView: GlobalToastView(appName: appName) { [weak panel] in panel?.orderOut(nil) })
         hostingView.frame = contentRect
@@ -59,7 +66,7 @@ final class ToastPresenter {
     }
 
     private func positionPanel(_ panel: NSPanel) {
-        guard let screen = NSScreen.main else { return }
+        guard let screen = NSScreen.main ?? NSScreen.screens.first else { return }
         let panelSize = panel.frame.size
         let screenFrame = screen.visibleFrame
         let origin = CGPoint(
@@ -67,6 +74,20 @@ final class ToastPresenter {
             y: screenFrame.midY - panelSize.height / 2
         )
         panel.setFrameOrigin(origin)
+        enforceTopLevel(for: panel)
+    }
+
+    private func enforceTopLevel(for panel: NSPanel) {
+        panel.collectionBehavior.insert(.canJoinAllSpaces)
+        panel.collectionBehavior.insert(.fullScreenAuxiliary)
+        panel.collectionBehavior.insert(.ignoresCycle)
+        panel.collectionBehavior.insert(.stationary)
+        let maximumLevel = NSWindow.Level(CGWindowLevelForKey(.maximumWindow))
+        if panel.level != maximumLevel {
+            panel.level = maximumLevel
+        }
+        panel.orderFrontRegardless()
+        panel.alphaValue = 1
     }
 }
 

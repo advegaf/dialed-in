@@ -38,6 +38,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.windowController?.showWindow()
             }
         }
-        HotKeyManager.shared.registerDefaultHotKey()
+        HotKeyManager.shared.registerStoredHotKey()
     }
 }

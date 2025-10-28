@@ -6,9 +6,11 @@
 //
 
 import SwiftUI
+import AppKit
 
 struct TimerSessionView: View {
     @EnvironmentObject private var sessionController: FocusSessionController
+    @AppStorage("dialedIn.sessionMode") private var sessionModeRawValue: String = FocusSessionMode.allowList.rawValue
 
     @AppStorage("dialedIn.focusSelectedMinutes") private var storedFocusMinutes: Double = 30
     @State private var selectedMinutes: Double = 30
@@ -23,6 +25,51 @@ struct TimerSessionView: View {
 
     private var buttonState: ActionButtonState {
         isSessionActive ? .endSession : .startFocus
+    }
+
+    private var sessionMode: FocusSessionMode {
+        FocusSessionMode(rawValue: sessionModeRawValue) ?? .allowList
+    }
+
+    private var headerTitle: String { "Session Timer" }
+
+    private var headerSubtitle: String {
+        switch sessionMode {
+        case .allowList:
+            return "Dialed In blocks everything except the apps you approve for this session."
+        case .blockList:
+            return "Dialed In blocks only the apps you select while leaving everything else open."
+        }
+    }
+
+    private var setupTitle: String {
+        sessionMode == .allowList ? "Dialed In Session" : "Create a block session"
+    }
+
+    private var setupSubtitle: String {
+        sessionMode == .allowList
+            ? "Spin the dial to choose how long your allowed apps stay open."
+            : "Choose how long Dialed In should keep those distractions closed."
+    }
+
+    private var activeTitle: String {
+        sessionMode == .allowList ? "Stay locked in" : "Stay distraction free"
+    }
+
+    private var activeSubtitle: String {
+        let count = activeSessionApps.count
+        switch sessionMode {
+        case .allowList:
+            if count == 0 {
+                return "All other apps remain blocked."
+            }
+            return "Dialed In is keeping \(count) app\(count == 1 ? "" : "s") available."
+        case .blockList:
+            if count == 0 {
+                return "No apps are blocked this session."
+            }
+            return "Dialed In is blocking \(count) app\(count == 1 ? "" : "s")."
+        }
     }
 
     var body: some View {
@@ -83,11 +130,11 @@ struct TimerSessionView: View {
                 )
 
             VStack(alignment: .leading, spacing: 4) {
-                Text("Session Timer")
+                Text(headerTitle)
                     .font(Typography.largeTitle)
                     .foregroundColor(Palette.textPrimary)
 
-                Text("Dialed In keeps you locked into the apps you approved for this focus session.")
+                Text(headerSubtitle)
                     .font(Typography.body)
                     .foregroundColor(Palette.textSecondary)
             }
@@ -98,6 +145,15 @@ struct TimerSessionView: View {
 
     private var setupContent: some View {
         VStack(spacing: Spacing.xxl) {
+            VStack(spacing: Spacing.sm) {
+                Text(setupTitle)
+                    .font(Typography.title)
+                    .foregroundColor(Palette.textPrimary)
+                Text(setupSubtitle)
+                    .font(Typography.body)
+                    .foregroundColor(Palette.textSecondary)
+            }
+
             HStack {
                 Spacer()
                 FocusDial(
@@ -114,13 +170,15 @@ struct TimerSessionView: View {
             statGrid(primary: primaryStatDescription, secondary: secondaryStatDescription)
 
             if !selectedApps.isEmpty {
-                SelectedAppsPanel(selectedApps: selectedApps, onRemove: { _ in })
+                SelectedAppsPanel(selectedApps: selectedApps, onRemove: { _ in }, mode: sessionMode)
                     .frame(maxWidth: .infinity)
             }
 
+            historySection
+
             PrimaryActionButton(
                 state: buttonState,
-                isEnabled: !selectedApps.isEmpty
+                isEnabled: sessionMode == .allowList ? !selectedApps.isEmpty : true
             ) {
                 toggleSession()
             }
@@ -130,6 +188,15 @@ struct TimerSessionView: View {
 
     private var activeSessionContent: some View {
         VStack(spacing: Spacing.xxl) {
+            VStack(spacing: Spacing.sm) {
+                Text(activeTitle)
+                    .font(Typography.title)
+                    .foregroundColor(Palette.textPrimary)
+                Text(activeSubtitle)
+                    .font(Typography.body)
+                    .foregroundColor(Palette.textSecondary)
+            }
+
             HStack {
                 Spacer()
                 CircularTimerView(totalSeconds: totalSeconds, remainingSeconds: remainingSeconds, isActive: true)
@@ -140,9 +207,11 @@ struct TimerSessionView: View {
             statGrid(primary: activePrimaryStat, secondary: activeSecondaryStat)
 
             if !activeSessionApps.isEmpty {
-                SelectedAppsPanel(selectedApps: activeSessionApps, onRemove: { _ in })
+                SelectedAppsPanel(selectedApps: activeSessionApps, onRemove: { _ in }, mode: sessionMode)
                     .frame(maxWidth: .infinity)
             }
+
+            historySection
 
             VStack(spacing: Spacing.md) {
                 PrimaryActionButton(state: .endSession, isEnabled: true) {
@@ -177,19 +246,33 @@ struct TimerSessionView: View {
     }
 
     private var secondaryStatDescription: SessionStatDescriptor {
-        SessionStatDescriptor(
-            title: "Apps Allowed",
-            value: selectedApps.isEmpty ? "No apps selected" : "\(selectedApps.count) apps",
-            icon: "lock.display", accent: Palette.textSecondary
+        let title = sessionMode == .allowList ? "Apps Allowed" : "Apps Blocked"
+        let icon = sessionMode == .allowList ? "lock.display" : "nosign"
+        let value: String
+        if selectedApps.isEmpty {
+            value = sessionMode == .allowList ? "No apps selected" : "No apps blocked"
+        } else {
+            value = "\(selectedApps.count) app\(selectedApps.count == 1 ? "" : "s")"
+        }
+        return SessionStatDescriptor(
+            title: title,
+            value: value,
+            icon: icon,
+            accent: Palette.textSecondary
         )
     }
 
     private var activePrimaryStat: SessionStatDescriptor {
         let minutesRemaining = max(remainingSeconds / 60, 0)
+        let title = sessionMode == .allowList ? "Time Remaining" : "Focus Ends"
+        let icon = sessionMode == .allowList ? "hourglass.circle.fill" : "lock.slash"
+        let value = sessionMode == .allowList
+            ? "\(minutesRemaining) minute\(minutesRemaining == 1 ? "" : "s") left"
+            : remainingSummary
         return SessionStatDescriptor(
-            title: "Time Remaining",
-            value: "\(minutesRemaining) minute\(minutesRemaining == 1 ? "" : "s") left",
-            icon: "hourglass.circle.fill",
+            title: title,
+            value: value,
+            icon: icon,
             accent: Palette.accent
         )
     }
@@ -198,19 +281,27 @@ struct TimerSessionView: View {
         let formatter = DateFormatter()
         formatter.timeStyle = .short
         let endDate = Date().addingTimeInterval(TimeInterval(remainingSeconds))
+        let title = sessionMode == .allowList ? "Finishes" : "Unlocked"
         return SessionStatDescriptor(
-            title: "Finishes",
+            title: title,
             value: formatter.string(from: endDate),
             icon: "calendar.badge.clock",
             accent: Palette.textSecondary
         )
     }
 
+    private var remainingSummary: String {
+        let minutesRemaining = max(remainingSeconds / 60, 0)
+        return "\(minutesRemaining) minute\(minutesRemaining == 1 ? "" : "s") left"
+    }
+
     private func toggleSession() {
         if isSessionActive {
             sessionController.endSession()
         } else {
-            sessionController.startSession(apps: selectedApps, durationMinutes: selectedMinutes)
+            Task { @MainActor in
+                presentStartSessionPrompt()
+            }
         }
     }
 

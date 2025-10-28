@@ -10,11 +10,21 @@ import SwiftUI
 struct SelectedAppsPanel: View {
     let selectedApps: [AppItem]
     let onRemove: (AppItem) -> Void
+    var mode: FocusSessionMode = .allowList
+
+    private var titleText: String {
+        switch mode {
+        case .allowList:
+            return "\(selectedApps.count) app\(selectedApps.count == 1 ? "" : "s") allowed"
+        case .blockList:
+            return "\(selectedApps.count) app\(selectedApps.count == 1 ? "" : "s") blocked"
+        }
+    }
 
     var body: some View {
         if !selectedApps.isEmpty {
             VStack(alignment: .leading, spacing: Spacing.md) {
-                Text("\(selectedApps.count) app\(selectedApps.count == 1 ? "" : "s") selected")
+                Text(titleText)
                     .font(Typography.caption)
                     .foregroundColor(Palette.textSecondary)
 
@@ -70,25 +80,29 @@ struct SelectedAppBadge: View {
     var body: some View {
         VStack(spacing: Spacing.xs) {
             ZStack(alignment: .topTrailing) {
-                // App icon
                 Circle()
                     .fill(Palette.sidebarHighlight.opacity(isHovered ? 0.7 : 0.55))
-                    .frame(width: 48, height: 48)
+                    .frame(width: 56, height: 56)
                     .overlay(badgeIcon)
 
-                // Remove button (shows on hover)
                 if isHovered {
-                    Button(action: onRemove) {
+                    Button {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                            onRemove()
+                        }
+                    } label: {
                         Image(systemName: "xmark.circle.fill")
-                            .font(Typography.headline)
+                            .font(Typography.subheadline)
                             .foregroundColor(Palette.danger)
+                            .padding(4)
                             .background(Circle().fill(Palette.sidebar))
                     }
                     .buttonStyle(.plain)
-                    .offset(x: 4, y: -4)
+                    .padding(2)
                     .transition(.scale.combined(with: .opacity))
                 }
             }
+            .padding(2)
 
             Text(app.name)
                 .font(Typography.caption)
@@ -101,6 +115,7 @@ struct SelectedAppBadge: View {
                 isHovered = hovering
             }
         }
+        .contentShape(Rectangle())
     }
 }
 
