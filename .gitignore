@@ -32,3 +32,6 @@ fastlane/test_output
 # App-specific: do not commit the internal roadmap
 # (explicit file in this repo root)
 dialed-in-ui-roadmap.md
+
+# Local tooling
+.claude/
