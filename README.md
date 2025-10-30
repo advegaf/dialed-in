@@ -16,6 +16,17 @@ Dialed In is a focus tool that doesn’t negotiate. During a session, your distr
 ## Why it’s different
 This isn’t a reminder; it’s enforcement. Many “focus” apps nudge you. Dialed In denies the distraction outright until your timer ends.
 
+## Screenshots
+<p align="center">
+  <img src="docs/screenshots/focus-scope.png" alt="Focus Scope (Allow/Block lists and app selection)" width="720"/>
+</p>
+<p align="center">
+  <img src="docs/screenshots/session-timer.png" alt="Session Timer with radial countdown" width="720"/>
+</p>
+<p align="center">
+  <img src="docs/screenshots/onboarding.png" alt="Onboarding — Dialed In overview" width="720"/>
+</p>
+
 ## Features
 - Hard block: fully prevents opening/switching to selected apps during a session
 - Menu bar countdown with quick controls (add 5 min, end session)
