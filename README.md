@@ -18,13 +18,13 @@ This isn’t a reminder; it’s enforcement. Many “focus” apps nudge you. Di
 
 ## Screenshots
 <p align="center">
-  <img src="docs/screenshots/focus-scope.png" alt="Focus Scope (Allow/Block lists and app selection)" width="720"/>
+  <img src="screenshots/image3.png" alt="Focus Scope (Allow/Block lists and app selection)" width="720"/>
 </p>
 <p align="center">
-  <img src="docs/screenshots/session-timer.png" alt="Session Timer with radial countdown" width="720"/>
+  <img src="screenshots/image1.png" alt="Session Timer with radial countdown" width="720"/>
 </p>
 <p align="center">
-  <img src="docs/screenshots/onboarding.png" alt="Onboarding — Dialed In overview" width="720"/>
+  <img src="screenshots/image2.png" alt="Onboarding — Dialed In overview" width="720"/>
 </p>
 
 ## Features
