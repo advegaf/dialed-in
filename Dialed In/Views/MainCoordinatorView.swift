@@ -177,7 +177,7 @@ struct MainCoordinatorView: View {
         case .general:
             AppSelectionView(apps: $apps, isLoading: isLoadingApplications, loadError: applicationLoadError)
         case .sessionTimer:
-            TimerSessionView(selectedApps: selectedApps)
+            TimerSessionView(apps: $apps)
         default:
             PlaceholderPane(title: "Coming Soon")
         }
@@ -282,9 +282,11 @@ struct MainCoordinatorView_Previews: PreviewProvider {
     static var previews: some View {
         let menuBarManager = MenuBarManager()
         let sessionController = FocusSessionController(menuBarManager: menuBarManager)
+        let templateStore = SessionTemplateStore()
 
         return MainCoordinatorView()
             .environmentObject(sessionController)
+            .environmentObject(templateStore)
             .preferredColorScheme(.dark)
             .frame(width: 960, height: 680)
     }

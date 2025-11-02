@@ -19,6 +19,7 @@ import AppKit
     private var blockedResetWorkItem: DispatchWorkItem?
     private var lastActiveAllowedBundleID: String?
     private var sessionStartDate: Date?
+    private var disableWhileFullscreen = UserDefaults.standard.bool(forKey: "dialedIn.disableWhileFullscreen")
 
     private var sessionMode: FocusSessionMode = .allowList
     private var blockedBundleIDs: Set<String> = []
@@ -34,12 +35,13 @@ import AppKit
 
     private let menuBarManager: MenuBarManager
     private let workspaceCenter = NSWorkspace.shared.notificationCenter
-    private let historyStore = SessionHistoryStore()
+    private let historyStore = SessionHistoryStore(cloudSyncManager: CloudSyncManager.shared)
 
     init(menuBarManager: MenuBarManager) {
         self.menuBarManager = menuBarManager
         sessionHistory = historyStore.load()
         registerMenuBarNotifications()
+        registerForCloudHistoryUpdates()
     }
 
     // MARK: - Session lifecycle
@@ -145,8 +147,46 @@ import AppKit
         menuBarManager.updateStatus(isActive: true, remainingSeconds: remainingSeconds)
     }
 
+    func setDisableWhileFullscreen(_ value: Bool) {
+        disableWhileFullscreen = value
+        guard isSessionActive else { return }
+
+        if value {
+            // When bypassing enforcement begins, allow the active fullscreen app to remain focused.
+            if let bundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier {
+                lastActiveAllowedBundleID = bundleID
+            }
+        } else {
+            enforceCurrentFrontmostApplication()
+            terminateDisallowedRunningApplications()
+        }
+    }
+
     func dismissCompletionSummary() {
         completedSessionMinutes = nil
+    }
+
+    func synchronizeHistoryWithCloudIfEnabled() {
+        historyStore.save(sessionHistory)
+    }
+
+    func importSessionHistoryFromCloud(_ records: [SessionRecord]) {
+        sessionHistory = historyStore.merge(with: records)
+    }
+
+    func startSession(template: SessionTemplate, availableApps: [AppItem]) {
+        let idSet = Set(template.appIDs)
+        let appsToUse = availableApps.filter { idSet.contains($0.id) }
+
+        if template.mode == .allowList && appsToUse.isEmpty {
+            return
+        }
+
+        startSession(
+            apps: appsToUse,
+            mode: template.mode,
+            durationMinutes: Double(template.durationMinutes)
+        )
     }
 
     // MARK: - Internal helpers
@@ -213,6 +253,11 @@ import AppKit
               let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
               let bundleID = app.bundleIdentifier else { return }
 
+        if shouldBypassEnforcementForFullscreen() {
+            lastActiveAllowedBundleID = bundleID
+            return
+        }
+
         if sessionMode == .blockList {
             if blockedBundleIDs.contains(bundleID) {
                 block(application: app, bundleID: bundleID)
@@ -235,6 +280,11 @@ import AppKit
               let app = NSWorkspace.shared.frontmostApplication,
               let bundleID = app.bundleIdentifier else { return }
 
+        if shouldBypassEnforcementForFullscreen() {
+            lastActiveAllowedBundleID = bundleID
+            return
+        }
+
         if allowedBundleIDs.contains(bundleID) {
             lastActiveAllowedBundleID = bundleID
         } else {
@@ -244,11 +294,17 @@ import AppKit
 
     private func handleSpaceChange() {
         guard isSessionActive else { return }
+        if shouldBypassEnforcementForFullscreen() { return }
         enforceCurrentFrontmostApplication()
         terminateDisallowedRunningApplications()
     }
 
     private func block(application: NSRunningApplication, bundleID: String) {
+        if shouldBypassEnforcementForFullscreen() {
+            lastActiveAllowedBundleID = bundleID
+            return
+        }
+
         let name = application.localizedName ?? bundleID
         triggerBlockedToast(for: name)
         ToastPresenter.shared.show(appName: name)
@@ -284,6 +340,8 @@ import AppKit
     }
 
     private func terminateDisallowedRunningApplications() {
+        if shouldBypassEnforcementForFullscreen() { return }
+
         switch sessionMode {
         case .allowList:
             for app in NSWorkspace.shared.runningApplications {
@@ -305,6 +363,8 @@ import AppKit
     }
 
     func minimizeDistractions() {
+        if shouldBypassEnforcementForFullscreen() { return }
+
         for app in NSWorkspace.shared.runningApplications {
             guard let bundleID = app.bundleIdentifier else { continue }
             if app == NSRunningApplication.current { continue }
@@ -337,6 +397,21 @@ import AppKit
         }
 
         notificationObservers = [addTimeObserver, endSessionObserver]
+    }
+
+    private func registerForCloudHistoryUpdates() {
+        CloudSyncManager.shared.sessionHistoryDidChange = { [weak self] records in
+            Task { @MainActor in
+                guard let self else { return }
+                guard UserDefaults.standard.bool(forKey: "dialedIn.syncAcrossDevices") else { return }
+                self.importSessionHistoryFromCloud(records)
+            }
+        }
+    }
+
+    private func shouldBypassEnforcementForFullscreen() -> Bool {
+        guard disableWhileFullscreen, isSessionActive else { return false }
+        return FullscreenStateMonitor.isFrontmostApplicationFullscreen()
     }
 
 }

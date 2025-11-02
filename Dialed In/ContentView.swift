@@ -22,10 +22,12 @@ struct ContentView_Previews: PreviewProvider {
         let menuBarManager = MenuBarManager()
         menuBarManager.windowController = windowController
         let sessionController = FocusSessionController(menuBarManager: menuBarManager)
+        let templateStore = SessionTemplateStore()
 
         return ContentView()
             .environmentObject(menuBarManager)
             .environmentObject(sessionController)
             .environmentObject(windowController)
+            .environmentObject(templateStore)
     }
 }

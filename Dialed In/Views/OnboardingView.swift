@@ -29,20 +29,7 @@ struct OnboardingView: View {
             VStack(spacing: 0) {
                 Spacer()
 
-                // Icon - clean and minimal
-                ZStack {
-                    // Subtle shadow circle
-                    Circle()
-                        .fill(Color.black.opacity(0.04))
-                        .frame(width: 96, height: 96)
-                        .blur(radius: 20)
-                        .offset(y: 10)
-
-                    // Icon
-                    Image(systemName: "moon.fill")
-                        .font(.system(size: 52, weight: .light))
-                        .foregroundColor(Color(hex: "0A84FF"))
-                }
+                logoBadge
                 .scaleEffect(iconScale)
                 .opacity(iconOpacity)
 
@@ -142,6 +129,37 @@ struct OnboardingView: View {
         withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
             showOnboarding = false
         }
+    }
+}
+
+private extension OnboardingView {
+    var logoBadge: some View {
+        ZStack {
+            Circle()
+                .fill(Color.black.opacity(0.06))
+                .frame(width: 128, height: 128)
+                .blur(radius: 28)
+                .offset(y: 12)
+
+            Image(nsImage: applicationIcon)
+                .resizable()
+                .interpolation(.high)
+                .scaledToFit()
+                .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+                .frame(width: 108, height: 108)
+                .shadow(color: Color.black.opacity(0.2), radius: 18, x: 0, y: 12)
+        }
+    }
+}
+
+private extension OnboardingView {
+    var applicationIcon: NSImage {
+        if let bundleIcon = NSApp?.applicationIconImage {
+            return bundleIcon
+        }
+        let icon = NSWorkspace.shared.icon(forFile: Bundle.main.bundlePath)
+        icon.size = NSSize(width: 512, height: 512)
+        return icon
     }
 }
 

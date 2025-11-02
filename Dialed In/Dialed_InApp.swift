@@ -15,6 +15,8 @@ struct Dialed_InApp: App {
     @StateObject private var menuBarManager: MenuBarManager
     @StateObject private var sessionController: FocusSessionController
     @StateObject private var windowController: WindowStateController
+    @StateObject private var templateStore: SessionTemplateStore
+    private let templateScheduler: SessionTemplateScheduler
 
     init() {
         let windowController = WindowStateController()
@@ -27,6 +29,11 @@ struct Dialed_InApp: App {
         let sessionController = FocusSessionController(menuBarManager: menuManager)
         _sessionController = StateObject(wrappedValue: sessionController)
 
+        let templateStore = SessionTemplateStore()
+        _templateStore = StateObject(wrappedValue: templateStore)
+
+        templateScheduler = SessionTemplateScheduler(templateStore: templateStore, sessionController: sessionController)
+
         appDelegate.sessionController = sessionController
         appDelegate.windowController = windowController
     }
@@ -37,6 +44,7 @@ struct Dialed_InApp: App {
                 .environmentObject(menuBarManager)
                 .environmentObject(sessionController)
                 .environmentObject(windowController)
+                .environmentObject(templateStore)
                 .frame(width: 960, height: 680)
         }
         .windowStyle(.hiddenTitleBar)

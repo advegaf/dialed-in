@@ -9,6 +9,7 @@ import SwiftUI
 
 struct AppSelectionView: View {
     @EnvironmentObject private var sessionController: FocusSessionController
+    @EnvironmentObject private var menuBarManager: MenuBarManager
     @Binding var apps: [AppItem]
     let isLoading: Bool
     let loadError: String?
@@ -16,6 +17,9 @@ struct AppSelectionView: View {
     @State private var searchText = ""
     @State private var hotKeyConfiguration = HotKeyManager.shared.currentConfiguration
     @State private var selectedAppIDs: Set<String> = []
+    @State private var hasSyncedLaunchPreference = false
+    @State private var launchPreferenceReady = false
+    @State private var isApplyingCloudSelection = false
     @AppStorage("dialedIn.sessionMode") private var sessionModeRawValue: String = FocusSessionMode.allowList.rawValue
     @AppStorage("dialedIn.launchAtLogin") private var launchAtLogin = true
     @AppStorage("dialedIn.syncAcrossDevices") private var syncAcrossDevices = true
@@ -25,6 +29,7 @@ struct AppSelectionView: View {
     @AppStorage("dialedIn.expandOnHover") private var expandOnHover = true
     @AppStorage("dialedIn.hoverPreviewDelay") private var hoverPreviewDelay: Double = 0.2
 
+    private let cloudSyncManager = CloudSyncManager.shared
     private var filteredApps: [AppItem] {
         guard !searchText.isEmpty else { return apps }
         return apps.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
@@ -133,14 +138,55 @@ struct AppSelectionView: View {
             } else {
                 syncAppsWithSelectedIDs()
             }
+            synchronizeLaunchPreferenceIfNeeded()
+            menuBarManager.setHidden(hideMenuBarIcon)
+            sessionController.setDisableWhileFullscreen(disableWhileFullscreen)
+            cloudSyncManager.synchronize()
+            if syncAcrossDevices {
+                applyCloudSelectionsIfAvailable()
+                HotKeyManager.shared.synchronizeWithCloudIfEnabled()
+                sessionController.synchronizeHistoryWithCloudIfEnabled()
+            }
         }
         .onChange(of: apps) { _, newValue in
             let currentSelections = Set(newValue.filter { $0.isSelected }.map { $0.id })
-            if !currentSelections.isEmpty {
-                selectedAppIDs.formUnion(currentSelections)
+            if selectedAppIDs != currentSelections {
+                selectedAppIDs = currentSelections
             }
-            syncAppsWithSelectedIDs()
             persistSelection()
+        }
+        .onChange(of: launchAtLogin) { oldValue, newValue in
+            guard launchPreferenceReady else { return }
+            applyLaunchAtLoginPreference(newValue: newValue, previousValue: oldValue)
+        }
+        .onChange(of: syncAcrossDevices) { _, newValue in
+            cloudSyncManager.synchronize()
+            if newValue {
+                applyCloudSelectionsIfAvailable()
+                cloudSyncManager.setSelectedAppIDs(Array(selectedAppIDs), enabled: true)
+                if let records = cloudSyncManager.cloudSessionHistory() {
+                    sessionController.importSessionHistoryFromCloud(records)
+                }
+                sessionController.synchronizeHistoryWithCloudIfEnabled()
+                HotKeyManager.shared.synchronizeWithCloudIfEnabled()
+                let currentConfig = HotKeyManager.shared.currentConfiguration
+                let payload = CloudSyncManager.HotKeyPayload(
+                    keyCode: currentConfig.keyCode,
+                    modifiers: currentConfig.modifiers.rawValue
+                )
+                cloudSyncManager.setHotKeyConfiguration(payload, enabled: true)
+            }
+        }
+        .onChange(of: hideMenuBarIcon) { _, newValue in
+            menuBarManager.setHidden(newValue)
+        }
+        .onChange(of: disableWhileFullscreen) { _, newValue in
+            sessionController.setDisableWhileFullscreen(newValue)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .cloudSelectedAppIDsDidChange)) { notification in
+            guard syncAcrossDevices,
+                  let ids = notification.userInfo?["ids"] as? [String] else { return }
+            applyCloudSelectedAppIDs(ids)
         }
     }
 
@@ -160,12 +206,21 @@ struct AppSelectionView: View {
                     .font(Typography.largeTitle)
                     .foregroundColor(Palette.textPrimary)
 
-                Text("Dialed In blocks everything except the apps you approve for this session.")
+                Text(sessionDescription)
                     .font(Typography.body)
                     .foregroundColor(Palette.textSecondary)
             }
 
             Spacer(minLength: 0)
+        }
+    }
+
+    private var sessionDescription: String {
+        switch sessionMode {
+        case .allowList:
+            return "Dialed In blocks everything except the apps you approve for this session."
+        case .blockList:
+            return "Dialed In blocks only the apps you select while leaving everything else open."
         }
     }
 
@@ -345,8 +400,50 @@ struct AppSelectionView: View {
         }
     }
 
-    private func persistSelection() {
-        UserDefaults.standard.set(Array(selectedAppIDs), forKey: "dialedIn.selectedAppIDs")
+    private func persistSelection(propagateToCloud: Bool = true) {
+        let ids = Array(selectedAppIDs)
+        UserDefaults.standard.set(ids, forKey: "dialedIn.selectedAppIDs")
+
+        guard propagateToCloud, syncAcrossDevices, !isApplyingCloudSelection else { return }
+        cloudSyncManager.setSelectedAppIDs(ids, enabled: true)
+    }
+
+    private func applyCloudSelectionsIfAvailable() {
+        guard syncAcrossDevices, let ids = cloudSyncManager.cloudSelectedAppIDs() else { return }
+        applyCloudSelectedAppIDs(ids)
+    }
+
+    private func applyCloudSelectedAppIDs(_ ids: [String]) {
+        isApplyingCloudSelection = true
+        selectedAppIDs = Set(ids)
+        syncAppsWithSelectedIDs()
+        persistSelection(propagateToCloud: false)
+        isApplyingCloudSelection = false
+    }
+
+    private func synchronizeLaunchPreferenceIfNeeded() {
+        guard !hasSyncedLaunchPreference else {
+            launchPreferenceReady = true
+            return
+        }
+
+        launchPreferenceReady = false
+        let currentStatus = LaunchAtLoginManager.isEnabled
+        if launchAtLogin != currentStatus {
+            launchAtLogin = currentStatus
+        }
+        hasSyncedLaunchPreference = true
+        launchPreferenceReady = true
+    }
+
+    private func applyLaunchAtLoginPreference(newValue: Bool, previousValue: Bool) {
+        do {
+            try LaunchAtLoginManager.setEnabled(newValue)
+        } catch {
+            launchPreferenceReady = false
+            launchAtLogin = previousValue
+            launchPreferenceReady = true
+        }
     }
 }
 
@@ -547,10 +644,13 @@ struct AppSelectionView_Previews: PreviewProvider {
         let menuBarManager = MenuBarManager()
         menuBarManager.windowController = windowController
         let sessionController = FocusSessionController(menuBarManager: menuBarManager)
+        let templateStore = SessionTemplateStore()
 
         return AppSelectionView(apps: .constant(AppItem.sampleApps), isLoading: false, loadError: nil)
             .environmentObject(sessionController)
+            .environmentObject(menuBarManager)
             .environmentObject(windowController)
+            .environmentObject(templateStore)
             .preferredColorScheme(.dark)
             .frame(width: 960, height: 680)
     }

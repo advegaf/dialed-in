@@ -13,6 +13,7 @@ import Combine
 class MenuBarManager: ObservableObject {
     private var statusItem: NSStatusItem?
     private var menu: NSMenu?
+    private var isHidden: Bool
 
     @Published var isSessionActive: Bool = false
     @Published var remainingTime: String = ""
@@ -20,10 +21,17 @@ class MenuBarManager: ObservableObject {
     weak var windowController: WindowStateController?
 
     init() {
-        setupMenuBar()
+        let shouldHide = UserDefaults.standard.bool(forKey: "dialedIn.hideMenuBarIcon")
+        isHidden = shouldHide
+
+        if !shouldHide {
+            setupMenuBar()
+        }
     }
 
     private func setupMenuBar() {
+        guard statusItem == nil else { return }
+
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
         if let button = statusItem?.button {
@@ -36,6 +44,25 @@ class MenuBarManager: ObservableObject {
         statusItem?.menu = menu
 
         updateMenu()
+    }
+
+    private func tearDownMenuBar() {
+        if let statusItem {
+            NSStatusBar.system.removeStatusItem(statusItem)
+        }
+        statusItem = nil
+        menu = nil
+    }
+
+    func setHidden(_ hidden: Bool) {
+        guard hidden != isHidden else { return }
+        isHidden = hidden
+
+        if hidden {
+            tearDownMenuBar()
+        } else {
+            setupMenuBar()
+        }
     }
 
     @objc private func menuBarButtonClicked() {
@@ -60,22 +87,20 @@ class MenuBarManager: ObservableObject {
     private func updateIcon() {
         guard let button = statusItem?.button else { return }
 
-        if isSessionActive {
-            // Show timer icon when active
-            let icon = NSImage(systemSymbolName: "timer", accessibilityDescription: "Timer Active")
-            icon?.isTemplate = true
-            button.image = icon
+        let iconImage = applicationIcon
+        iconImage.size = NSSize(width: 18, height: 18)
+        iconImage.isTemplate = false
+        button.image = iconImage
+        button.title = isSessionActive ? " \(remainingTime)" : ""
+        button.imagePosition = .imageLeft
+    }
 
-            if !remainingTime.isEmpty {
-                button.title = " \(remainingTime)"
-            }
-        } else {
-            // Show default icon when inactive
-            let icon = NSImage(systemSymbolName: "moon.fill", accessibilityDescription: "Dialed In")
-            icon?.isTemplate = true
-            button.image = icon
-            button.title = ""
+    private var applicationIcon: NSImage {
+        if let bundleIcon = NSApp?.applicationIconImage?.copy() as? NSImage {
+            return bundleIcon
         }
+        let icon = NSWorkspace.shared.icon(forFile: Bundle.main.bundlePath)
+        return icon
     }
 
     private func updateMenu() {

@@ -19,6 +19,8 @@ final class HotKeyManager {
     )
 
     private let storageKey = "dialedIn.escapeHotKey"
+    private let syncEnabledKey = "dialedIn.syncAcrossDevices"
+    private let cloudSyncManager = CloudSyncManager.shared
 
     private var hotKeyRef: EventHotKeyRef?
     private var eventHandlerRef: EventHandlerRef?
@@ -30,6 +32,8 @@ final class HotKeyManager {
 
     private init() {
         configuration = HotKeyManager.loadStoredConfiguration(key: storageKey) ?? HotKeyManager.defaultConfiguration
+        adoptCloudConfigurationIfNeeded()
+        registerForCloudUpdates()
     }
 
     func registerStoredHotKey() {
@@ -47,7 +51,7 @@ final class HotKeyManager {
         }
 
         configuration = sanitized
-        HotKeyManager.store(configuration: configuration, key: storageKey)
+        store(configuration: configuration)
     }
 
     func displayString(for configuration: Configuration) -> String {
@@ -132,12 +136,19 @@ final class HotKeyManager {
         return flags.intersection(mask)
     }
 
-    private static func store(configuration: Configuration, key: String) {
+    private func store(configuration: Configuration) {
         let payload: [String: Any] = [
             "keyCode": Int(configuration.keyCode),
             "modifiers": configuration.modifiers.rawValue
         ]
-        UserDefaults.standard.set(payload, forKey: key)
+        UserDefaults.standard.set(payload, forKey: storageKey)
+        if syncEnabled {
+            let payload = CloudSyncManager.HotKeyPayload(
+                keyCode: configuration.keyCode,
+                modifiers: configuration.modifiers.rawValue
+            )
+            cloudSyncManager.setHotKeyConfiguration(payload, enabled: true)
+        }
     }
 
     private static func loadStoredConfiguration(key: String) -> Configuration? {
@@ -160,29 +171,117 @@ final class HotKeyManager {
     }
 
     private static func keyName(for keyCode: UInt32) -> String {
+        if let mapped = keyDisplayMap[keyCode] {
+            return mapped
+        }
+
         switch keyCode {
-        case UInt32(kVK_Escape): return "Esc"
-        case UInt32(kVK_Space): return "Space"
-        case UInt32(kVK_Return): return "Return"
-        case UInt32(kVK_Delete): return "Delete"
-        case UInt32(kVK_Tab): return "Tab"
-        case UInt32(kVK_ForwardDelete): return "Del"
-        case UInt32(kVK_Help): return "Help"
-        case UInt32(kVK_LeftArrow): return "←"
-        case UInt32(kVK_RightArrow): return "→"
-        case UInt32(kVK_UpArrow): return "↑"
-        case UInt32(kVK_DownArrow): return "↓"
         case UInt32(kVK_F1)...UInt32(kVK_F20):
             return "F" + String(Int(keyCode - UInt32(kVK_F1) + 1))
-        case UInt32(kVK_ANSI_0)...UInt32(kVK_ANSI_9):
-            let digit = Int(keyCode - UInt32(kVK_ANSI_0))
-            return String(digit)
-        case UInt32(kVK_ANSI_A)...UInt32(kVK_ANSI_Z):
-            let unicodeScalar = UnicodeScalar(Int(keyCode - UInt32(kVK_ANSI_A)) + 65)!
-            return String(unicodeScalar)
         default:
             return String(format: "KeyCode %d", keyCode)
         }
+    }
+
+    private static let keyDisplayMap: [UInt32: String] = {
+        var map: [UInt32: String] = [
+            UInt32(kVK_Escape): "Esc",
+            UInt32(kVK_Space): "Space",
+            UInt32(kVK_Return): "Return",
+            UInt32(kVK_Delete): "Delete",
+            UInt32(kVK_Tab): "Tab",
+            UInt32(kVK_ForwardDelete): "Del",
+            UInt32(kVK_Help): "Help",
+            UInt32(kVK_LeftArrow): "←",
+            UInt32(kVK_RightArrow): "→",
+            UInt32(kVK_UpArrow): "↑",
+            UInt32(kVK_DownArrow): "↓"
+        ]
+
+        let digits: [(UInt32, String)] = [
+            (UInt32(kVK_ANSI_0), "0"),
+            (UInt32(kVK_ANSI_1), "1"),
+            (UInt32(kVK_ANSI_2), "2"),
+            (UInt32(kVK_ANSI_3), "3"),
+            (UInt32(kVK_ANSI_4), "4"),
+            (UInt32(kVK_ANSI_5), "5"),
+            (UInt32(kVK_ANSI_6), "6"),
+            (UInt32(kVK_ANSI_7), "7"),
+            (UInt32(kVK_ANSI_8), "8"),
+            (UInt32(kVK_ANSI_9), "9")
+        ]
+        digits.forEach { map[$0.0] = $0.1 }
+
+        let letters = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZ").map(String.init)
+        for (index, letter) in letters.enumerated() {
+            map[UInt32(index)] = letter
+        }
+
+        let symbols: [(UInt32, String)] = [
+            (UInt32(kVK_ANSI_Minus), "-"),
+            (UInt32(kVK_ANSI_Equal), "="),
+            (UInt32(kVK_ANSI_LeftBracket), "["),
+            (UInt32(kVK_ANSI_RightBracket), "]"),
+            (UInt32(kVK_ANSI_Backslash), "\\"),
+            (UInt32(kVK_ANSI_Semicolon), ";"),
+            (UInt32(kVK_ANSI_Quote), "'"),
+            (UInt32(kVK_ANSI_Comma), ","),
+            (UInt32(kVK_ANSI_Period), "."),
+            (UInt32(kVK_ANSI_Slash), "/"),
+            (UInt32(kVK_ANSI_Grave), "`")
+        ]
+        symbols.forEach { map[$0.0] = $0.1 }
+
+        return map
+    }()
+}
+
+private extension HotKeyManager {
+    var syncEnabled: Bool {
+        UserDefaults.standard.bool(forKey: syncEnabledKey)
+    }
+
+    func adoptCloudConfigurationIfNeeded() {
+        guard syncEnabled,
+              let payload = cloudSyncManager.cloudHotKeyConfiguration() else {
+            return
+        }
+
+        let config = Configuration(keyCode: payload.keyCode, modifiers: NSEvent.ModifierFlags(rawValue: payload.modifiers))
+        applyCloudConfiguration(config, shouldStore: false)
+    }
+
+    func registerForCloudUpdates() {
+        cloudSyncManager.hotKeyConfigurationDidChange = { [weak self] payload in
+            guard let self else { return }
+            guard self.syncEnabled else { return }
+            let newConfig = Configuration(
+                keyCode: payload.keyCode,
+                modifiers: NSEvent.ModifierFlags(rawValue: payload.modifiers)
+            )
+            self.applyCloudConfiguration(newConfig, shouldStore: true)
+        }
+    }
+
+    func applyCloudConfiguration(_ config: Configuration, shouldStore: Bool) {
+        guard config != configuration else { return }
+        configuration = config
+        _ = installHotKey(for: config)
+        if shouldStore {
+            store(configuration: config)
+        } else {
+            let payload: [String: Any] = [
+                "keyCode": Int(config.keyCode),
+                "modifiers": config.modifiers.rawValue
+            ]
+            UserDefaults.standard.set(payload, forKey: storageKey)
+        }
+    }
+}
+
+extension HotKeyManager {
+    func synchronizeWithCloudIfEnabled() {
+        adoptCloudConfigurationIfNeeded()
     }
 }
 

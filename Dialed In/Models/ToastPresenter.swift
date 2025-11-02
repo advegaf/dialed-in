@@ -47,7 +47,8 @@ final class ToastPresenter {
         panel.isOpaque = false
         panel.hasShadow = true
         panel.backgroundColor = .clear
-        let maximumLevel = NSWindow.Level(CGWindowLevelForKey(.maximumWindow))
+        let maximumLevelRawValue = Int(CGWindowLevelForKey(.maximumWindow))
+        let maximumLevel = NSWindow.Level(maximumLevelRawValue)
         panel.level = maximumLevel
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle, .transient]
         panel.ignoresMouseEvents = true
@@ -82,7 +83,8 @@ final class ToastPresenter {
         panel.collectionBehavior.insert(.fullScreenAuxiliary)
         panel.collectionBehavior.insert(.ignoresCycle)
         panel.collectionBehavior.insert(.stationary)
-        let maximumLevel = NSWindow.Level(CGWindowLevelForKey(.maximumWindow))
+        let maximumLevelRawValue = Int(CGWindowLevelForKey(.maximumWindow))
+        let maximumLevel = NSWindow.Level(maximumLevelRawValue)
         if panel.level != maximumLevel {
             panel.level = maximumLevel
         }
