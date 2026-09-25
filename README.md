@@ -49,6 +49,14 @@ This isn’t a reminder; it’s enforcement. Many “focus” apps nudge you. Di
 ## Privacy
 All focus and blocking logic runs locally on your Mac. No usage data is sent anywhere.
 
+## How I built it
+
+I built this with Claude Code and Codex working like a small team. One agent plans the work and
+writes a spec for each piece, subagents write the code from those specs, and the two tools review
+each other's changes. I approve the plan before any code gets written, I read every diff before
+it's committed, and nothing ships until the tests pass. Anything that touches security or user
+data I write or check line by line myself.
+
 ## Contributing
 Issues and PRs are welcome. Please build in Xcode and validate a few sessions (start/add time/end) before submitting changes.
 
